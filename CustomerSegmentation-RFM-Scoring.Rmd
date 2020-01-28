@@ -1,0 +1,239 @@
+---
+title: "Customer Segmentation using simple RFM Scoring"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+---
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7, 
+                      fig.height = 5,
+                      fig.align = 'center')
+```
+
+
+## Introduction:
+
+One of the most important tasks for any business is to know their customers. In today's world every business needs to offer personalized products and services to its customers or risk losing them. 
+
+Customers are  both similar and different. It is impossible to have individualized products and services for each customer. Hence the need to segment customers with similar characteristics and have tailored offerings to each group. 
+
+There are many characteristics on which customers can be segmented. Common characteristics used are customer behaviour, demography and interests. 
+
+Data like customer purchase date and value are readily available with vendors. It therefore makes sense to use them for targeted marketing. Recency of purchase, Frequency of purchases and Monetary value of purchases - popularly referred to as RFM (Receny-Frequency-Monetary) are one of the most effective methods used for customer segmentation.  
+
+Here we will explore using a simple RFM scoring method and segment customers into Platinum, Gold, Silver and Bronze customers
+
+### Data:
+
+We will use Superstore Orders data for this analysis. 
+
+Load dependent libraries
+
+```{r echo=TRUE, warning=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+```
+
+Load data from CSV file
+
+```{r echo=TRUE}
+# Load store orders data from csv file
+orders <- read_csv("https://raw.githubusercontent.com/madankundapur/DataAnalytics/master/Data/SuperstoreOrders.csv")
+
+```
+
+The dataset has 9994 observations with 21 variables and contains store orders data for the United States.
+
+```{r echo=TRUE}
+str(orders)
+```
+
+Data variable names have spaces in them and as a practise it is good to avoid spaces. Also note that the variable names are in proper casing - we will retain and follow that convention for naming data variables.
+
+```{r echo=TRUE}
+names(orders)<-str_replace_all(names(orders), c(" " = ""))
+```
+
+*OrderDate* variable is of type 'character'. Changing it to 'date'
+
+```{r echo=TRUE}
+orders$OrderDate <- as.Date(orders$OrderDate, "%m/%d/%Y")
+class(orders$OrderDate)
+```
+
+To keep data tidy check for duplicates and filter them out.
+
+```{r echo=TRUE}
+duplicates <- which(duplicated(orders))
+duplicates
+
+# No duplicates exist in data
+rm(duplicates)
+```
+
+Data that we need for RFM analysis is *OrderDate* and *Sales* amount by customer. The dataset has order details at the product level which we don't need. Let us aggregate *Sales* amount and select only necessary variables for further analysis
+
+```{r echo=TRUE}
+orders <- orders %>%
+  group_by(CustomerID, OrderID , OrderDate) %>%
+  summarize(Sales = sum(Sales)) %>%
+  select(CustomerID, OrderID , OrderDate, Sales)
+
+# Checking if the orders are equal to the observations in the dataset
+length(unique(orders$OrderID ))
+nrow(orders)
+
+```
+
+Order dates range from Jan 2015 through Dec 2018. Compute maximum date from the dataset. This will help compute *DaysSincePurchase* and *Recency*. Note that a day is added to the maximum date to ensure that there are no zeroes calculated (applies to purchases made on the last day).
+
+```{r echo=TRUE}
+range(orders$OrderDate)
+max_date <- max(orders$OrderDate)+1
+```
+
+
+Compute *PurchaseYear* - which is year part of order date and *DaysSincePurchase* - which is the difference between order date and the maximum date in the dataset
+
+```{r echo=TRUE}
+orders <- orders %>% 
+  mutate(PurchaseYear = as.numeric(format(OrderDate, "%Y")),
+         DaysSincePurchase = as.numeric(difftime(max_date, OrderDate,"days")))
+
+rm(max_date)
+```         
+         
+
+### Compute Recency, Frequency and Monetary Value:
+
+For each customer compute RFM values:
+
+   - *Recency* is the duration in days since the last purchase made by the customer
+   
+   - *Frequency* is the number of distinct orders by customer
+   
+   - *Monetary* value is total sales amount for the customer
+
+```{r echo=TRUE}
+
+customers <- orders %>%
+  group_by(CustomerID) %>%
+  summarise(Recency = min(DaysSincePurchase),
+            Frequency = n_distinct(OrderID), 
+            Monetary = sum(Sales))
+
+knitr::kable(summary(customers))
+```
+
+Plot distribution for Recency, Frequency and Monetary Value to explore RFM data
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Recency))  + 
+  geom_histogram(bins=20,fill = "darkred") +
+  labs(x = "Recency", y = "Count", title = "Recency Distribution")
+```
+
+From the Recency plot, more than 80% of customers have been active in the last one year, which is a good sign.  
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Frequency))  + 
+  geom_histogram(bins=10,fill = "steelblue")+
+  labs(x = "Frequency", y = "Count", title = "Frequency Distribution")
+```
+
+From the Frequency plot, the values are more-or-less distributed and the range is between 1 and 13 with an outlier of 17.  
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Monetary))  + 
+  geom_histogram(bins=20,fill = "green4") +
+  labs(x = "Monetary Value", y = "Count", title = "Monetary Value Distribution")
+```
+
+From the Monetary value plot, more than 97% of customers have spent less than $10000 across years.   
+
+Since the scale of values are very different for Recency, Frequency and Monetary. Let us remove the  skew and standardise the RFM values.
+
+```{r echo=TRUE}
+customers$RecencyZ <- scale(log(customers$Recency), center=TRUE, scale=TRUE)
+customers$FrequencyZ <- scale(log(customers$Frequency), center=TRUE, scale=TRUE)
+customers$MonetaryZ <- scale(log(customers$Monetary), center=TRUE, scale=TRUE)
+
+```
+
+We now have a tidy dataset with 793 observations of 8 variables to work with.
+
+***
+
+## Analysis:
+
+### Simple RFM Scoring:
+
+Using `ntile` analytic function divide Recency, Frequency and Monetary value into 4 buckets. 
+
+A value of 1 means Bronze, 2 means Silver, 3 means Gold and 4 means Platinum customer
+
+Recency score `RScore` is based on the recency of purchase. Lower the Recency, the better the customer - note the code uses `desc` for the `ntile` function.
+
+Frequency score `FScore` is based on the number of orders made by the customer. Higher the frequency, the better the customer.
+
+Monetary value score `MScore` is based on the total value of sales by customer. Higher the Recency, the better the customer.
+
+`RFMScore` is the mean of Recency, Frequency & Monetary Scores
+
+`RFMScoreLabel` is a label assigned based on `RFMScore`
+
+```{r echo=TRUE}
+customers <- customers %>%
+  mutate(RScore = ntile(desc(Recency),4), 
+          FScore = ntile(Frequency,4), 
+          MScore = ntile(Monetary,4),
+          RFMScore = round((RScore+FScore+MScore)/3,0),
+          RFMScoreLabel = case_when(RFMScore == 1 ~ "1-Bronze", 
+                                    RFMScore == 2 ~ "2-Silver", 
+                                    RFMScore == 3 ~ "3-Gold", 
+                                    RFMScore == 4 ~ "4-Platinum"))
+
+table(customers$RFMScoreLabel)
+
+customers %>% ggplot(aes(RFMScoreLabel)) +
+  geom_bar(fill = "steelblue") +
+  labs(x = "RFM Score", y = "Count", title = "RFM Score")
+
+```
+
+## Conclusion:
+
+```{r echo=TRUE}
+customers %>% 
+  group_by(RFMScoreLabel) %>% 
+  summarize(Rmean = mean(Recency), 
+            Fmean = mean(Frequency), 
+            Mmean=mean(Monetary),
+            Msum=sum(Monetary))
+
+```
+
+### Bronze customers:
+  - They are about 14% of customers. Have on an average bought products more than a year back, average frequency is about 3 times with an average purchase value of about $800. 
+  - While the revenue from this segment is about 4% they still are about 14% of the customers and action needs to be taken to attract them with discounts and offers.
+
+### Silver customers:
+  - This segment has about 34% customers and brings about 20% of the revenue. On an average these customers bought products  6 months back, average frequency is about 5 times with an average purchase value of about $1800.
+  - This is a significant chunk and action needs to be taken to retain them and move towards Gold customers
+
+### Gold customers:
+  - This segment has about 40% customers and brings more than half the business. On an average these customers bought products 3 months back, average frequency is about 7 times with an average purchase value of about $3900.
+  - This is defintely the most important customer segment and personalized attention needs to be given to each one of them. Further segmentation of these customers would yield more insights
+
+### Platinum customers:
+  - This segment has about 13% customers and brings about 23% of the revenue. On an average these customers bought things as recent as 1 month back, average frequency is about 10 times with an average purchase value of about $5200.
+  - These customers are willing to spend and buy more frequently. Marketing campaigns to increase revenue from these customers are a must.
+
+
+[R-Markdown](https://github.com/madankundapur/DataAnalytics/blob/master/CustomerSegmentation-RFM-Scoring.Rmd)
+
