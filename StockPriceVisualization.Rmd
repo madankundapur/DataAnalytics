@@ -1,0 +1,134 @@
+---
+title: "Stock Price Visualization using R"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 2
+---
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7, 
+                      fig.height = 5,
+                      fig.align = 'center')
+```
+
+Here are some simple and effective charts to visualize stock prices. 
+
+
+Load libraries:
+```{r}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(tidyquant)) install.packages("tidyquant", repos = "http://cran.us.r-project.org")
+```
+
+
+## Data:
+
+Using Google stock prices from tidyquant - FANG which has historical daily prices
+
+```{r}
+dat <- tq_get("GOOG", get = "stock.prices")
+```
+
+
+## Line Chart:
+- Using `ggplot` function with `geom_line` from `ggplot2` package to plot the line chart
+
+```{r}
+dat %>%
+  ggplot(aes(x = date, y = close)) +
+  geom_line() +
+  labs(title = "Google", 
+       subtitle = "Closing Prices - Line Chart", 
+       x = "Year",
+       y = "Closing Prices") 
+```
+
+
+## Candlestick Chart:
+- Using `geom_candlestick` from `tidyquant` to plot Candlestick chart
+- Candlestock chart needs Open,High,Low and Close prices
+- Line colors are set using `colour-up` & `colour_down`
+- Fill colors are set using `fill_up` & `fill_down`
+
+
+```{r}
+dat$year <- year(dat$date)
+
+dat %>%
+  filter(year==2019) %>%
+  ggplot(aes(x = date, y = close)) +
+   geom_candlestick(aes(open = open, high = high, low = low, close = close),
+                        colour_up = "green4", colour_down = "red", 
+                        fill_up  = "green4", fill_down  = "red") +
+  labs(title = "Google", 
+       subtitle = "Closing Prices - Candlestick Chart",
+       x = "Date", 
+       y = "Closing Price")
+```
+
+### Zooming in on the Candlestick Chart
+-  using `coord_x_date` to zoom in by specifying the start date and end date for x-axis and price range for the y-axis  
+
+```{r}
+enddate <- max(dat$date)
+startdate <- enddate - weeks(4)
+
+dat %>%
+  ggplot(aes(x = date, y = close)) +
+     geom_candlestick(aes(open = open, high = high, low = low, close = close),
+                        colour_up = "green4", colour_down = "red", 
+                        fill_up  = "green4", fill_down  = "red") +
+    labs(title = "Google", 
+         subtitle = "Zoomed in Candlestick Chart",
+          x = "Date",
+         y = "Closing Price") + 
+    coord_x_date(xlim = c(startdate, enddate),
+                 ylim = c(1350, 1500)) 
+```
+
+
+## Calendar Heatmap:
+- a heatmap of daily prices shown in a calendar 
+
+Adding required variables for calendar heatmap
+
+```{r}
+dat$year <- year(dat$date)
+dat$month <- month(dat$date)
+dat$weekday = as.POSIXlt(dat$date)$wday 
+dat$weekofmonth= (1 + as.integer(format(dat$date, "%d")) %/% 7)
+
+# to order by month names
+dat$month.f<-factor(dat$month,levels=as.character(1:12),
+                    labels=c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"),
+                    ordered=TRUE)  
+
+# to order by week day names
+dat$weekday.f<-factor(dat$weekday,levels=rev(1:7),
+                      labels=rev(c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")),
+                      ordered=TRUE)  
+
+```
+
+
+- using `facet_grid` to create year, month grids 
+- using `scale_fill_gradient` to show low to high prices in specified color gradient
+
+```{r, fig.height=10}
+dat %>% ggplot(aes(weekofmonth, weekday.f, fill = close)) + 
+  geom_tile(colour = "white") + 
+  facet_grid(year~month.f) + 
+  scale_fill_gradient(low="red", high="green4") +
+  labs(title = "Google", 
+       subtitle = "Closing Prices Heatmap",
+       x = "Week of Month",
+       y = "Week Day",
+       fill = "Close")
+
+```
+
