@@ -1,0 +1,345 @@
+---
+title: "Customer Segmentation using RFM - Clustering using K-means"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+---
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7, 
+                      fig.height = 5,
+                      fig.align = 'center')
+```
+
+
+## Introduction:
+
+One of the most important tasks for any business is to know their customers. In today's world every business needs to offer personalized products and services to its customers or risk losing them. 
+
+Customers are  both similar and different. It is impossible to have individualized products and services for each customer. Hence the need to segment customers with similar characteristics and have tailored offerings to each group. 
+
+There are many characteristics on which customers can be segmented. Common characteristics used are customer behaviour, demography and interests. 
+
+Data like customer purchase date and value are readily available with vendors. It therefore makes sense to use them for targeted marketing. Recency of purchase, Frequency of purchases and Monetary value of purchases - popularly referred to as RFM (Receny-Frequency-Monetary) are one of the most effective methods used for customer segmentation.  
+
+Clustering algorithms do not necessarily know the outcomes and are interested in discovering groups. K-means is one of the most popular ways to segment customers using unsupervised clustering techniques. 
+
+Given a set of observations (x1, x2, ..., xn), where each observation is a d-dimensional real vector, k-means clustering aims to partition n observations into k (≤ n) sets S = {S1, S2, ..., Sk} so as to minimize the within-cluster sum of squares... [more about k-means](https://en.wikipedia.org/wiki/K-means_clustering)
+
+We will use k-means for customer segmentation.
+
+### Data:
+
+We will use Superstore Orders data for this analysis. 
+
+Load dependent libraries
+
+```{r echo=TRUE, warning=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+```
+
+Load data from CSV file
+
+```{r echo=TRUE}
+# Load store orders data from csv file
+orders <- read_csv("https://raw.githubusercontent.com/madankundapur/DataAnalytics/master/Data/SuperstoreOrders.csv")
+
+```
+
+The dataset has 9994 observations with 21 variables and contains store orders data for the United States.
+
+```{r echo=TRUE}
+str(orders)
+```
+
+Data variable names have spaces in them and as a practise it is good to avoid spaces. Also note that the variable names are in proper casing - we will retain and follow that convention for naming data variables.
+
+```{r echo=TRUE}
+names(orders)<-str_replace_all(names(orders), c(" " = ""))
+```
+
+*OrderDate* variable is of type 'character'. Changing it to 'date'
+
+```{r echo=TRUE}
+orders$OrderDate <- as.Date(orders$OrderDate, "%m/%d/%Y")
+class(orders$OrderDate)
+```
+
+To keep data tidy check for duplicates and filter them out.
+
+```{r echo=TRUE}
+duplicates <- which(duplicated(orders))
+duplicates
+
+# No duplicates exist in data
+rm(duplicates)
+```
+
+Data that we need for RFM analysis is *OrderDate* and *Sales* amount by customer. The dataset has order details at the product level which we don't need. Let us aggregate *Sales* amount and select only necessary variables for further analysis
+
+```{r echo=TRUE}
+orders <- orders %>%
+  group_by(CustomerID, OrderID , OrderDate) %>%
+  summarize(Sales = sum(Sales)) %>%
+  select(CustomerID, OrderID , OrderDate, Sales)
+
+# Checking if the orders are equal to the observations in the dataset
+length(unique(orders$OrderID ))
+nrow(orders)
+
+```
+
+Order dates range from Jan 2015 through Dec 2018. Compute maximum date from the dataset. This will help compute *DaysSincePurchase* and *Recency*. Note that a day is added to the maximum date to ensure that there are no zeroes calculated (applies to purchases made on the last day).
+
+```{r echo=TRUE}
+range(orders$OrderDate)
+max_date <- max(orders$OrderDate)+1
+```
+
+
+Compute *PurchaseYear* - which is year part of order date and *DaysSincePurchase* - which is the difference between order date and the maximum date in the dataset
+
+```{r echo=TRUE}
+orders <- orders %>% 
+  mutate(PurchaseYear = as.numeric(format(OrderDate, "%Y")),
+         DaysSincePurchase = as.numeric(difftime(max_date, OrderDate,"days")))
+
+rm(max_date)
+```         
+         
+
+### Compute Recency, Frequency and Monetary Value:
+
+For each customer compute RFM values:
+
+   - *Recency* is the duration in days since the last purchase made by the customer
+   
+   - *Frequency* is the number of distinct orders by customer
+   
+   - *Monetary* value is total sales amount for the customer
+
+```{r echo=TRUE}
+
+customers <- orders %>%
+  group_by(CustomerID) %>%
+  summarise(Recency = min(DaysSincePurchase),
+            Frequency = n_distinct(OrderID), 
+            Monetary = sum(Sales))
+
+knitr::kable(summary(customers))
+```
+
+Plot distribution for Recency, Frequency and Monetary Value to explore RFM data
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Recency))  + 
+  geom_histogram(bins=20,fill = "darkred") +
+  labs(x = "Recency", y = "Count", title = "Recency Distribution")
+```
+
+From the Recency plot, more than 80% of customers have been active in the last one year, which is a good sign.  
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Frequency))  + 
+  geom_histogram(bins=10,fill = "steelblue")+
+  labs(x = "Frequency", y = "Count", title = "Frequency Distribution")
+```
+
+From the Frequency plot, the values are more-or-less distributed and the range is between 1 and 13 with an outlier of 17.  
+
+```{r echo=TRUE}
+customers %>% ggplot(aes(Monetary))  + 
+  geom_histogram(bins=20,fill = "green4") +
+  labs(x = "Monetary Value", y = "Count", title = "Monetary Value Distribution")
+```
+
+From the Monetary value plot, more than 97% of customers have spent less than $10000 across years.   
+
+Since the scale of values are very different for Recency, Frequency and Monetary. Let us remove the  skew and standardise the RFM values.
+
+```{r echo=TRUE}
+customers$RecencyZ <- scale(log(customers$Recency), center=TRUE, scale=TRUE)
+customers$FrequencyZ <- scale(log(customers$Frequency), center=TRUE, scale=TRUE)
+customers$MonetaryZ <- scale(log(customers$Monetary), center=TRUE, scale=TRUE)
+
+```
+
+We now have a tidy dataset with 793 observations of 8 variables to work with.
+
+***
+
+## Analysis:
+
+As mentioned earlier, for the purpose of this analysis we will use k-means clustering algorithm.
+
+To use k-means clustering algorithm we have to pre-define k, which is the number of clusters we want to define. The k-means algorithm is iterative. The first step is to define k centers. Then each observation is assigned to the cluster with the closest center to that observation. In the second step the centers are redefined using the observation in each cluster. The column means are used to define a centroid. We repeat these steps until the centers converge.
+
+Let us first see how the scatter plot looks for RFM values in the final dataset
+
+```{r echo=TRUE}
+
+customers %>% ggplot(aes(x=FrequencyZ,y=MonetaryZ)) +
+  geom_point(aes(colour = RecencyZ)) +
+  scale_colour_gradient(name="Recency") +
+  labs(x = "Frequency", y = "Monetary Value", title = "Scatter plot - Recency vs Frequency vs Monetary Value")
+
+```
+
+### K-means clustering 
+
+Note that the plot shows high-frequency and high monetary value customers in the top right with recency indicated in dark shades of blue. Similarly, low-frequency, low monetary value customers are in the bottom-left with recency indicated in the lighter shades of blue. 
+
+Looking at the entire plot it is hard find clusters. But the data points also don't seem to be distributed continuously. We therefore need to assume the clusters to extract and see which is the best fit. Let us assume a maximum value of 10 for cluster centers and loop through to arrive at the best cluster.
+
+We will print the medians of RFM grouped by the cluster levels to analyze and find the best cluster.
+
+Each cluster also provides us with the following information.
+
+  - *totss* is the total sum of squares
+  
+  - *withinss* is the vector of within-cluster sum of squares, one component per cluster
+  
+  - *tot.withinss* is the total within-cluster sum of squares, i.e. sum(withinss)
+  
+  - *betweenss* is the between-cluster sum of squares, i.e. totss-tot.withinss
+
+Also, let us temporarily persist *tot.withinss* and plot it to identify the best cluster. 
+
+```{r echo=TRUE}
+j<- 10
+
+# data frame to hold cluster components
+ss <- data.frame(K=integer(),
+                 TWSS=numeric())
+
+# ensure customers dataset is a data frame
+customers <- as.data.frame(customers)
+
+# loop to create upto 10 clusters 
+for (i in 1:j ) {
+  
+  set.seed(1, sample.kind="Rounding")
+  
+  # Run k-means with i centers, assume nstart =25
+  km <- kmeans(customers[,c(5:7)], centers = i, nstart = 25)
+  
+  # Adding cluster data  to customers dataset for each i in different variables
+  col_nm <- paste("C", i, sep="")
+  customers[,(col_nm)] <- factor(km$cluster, levels = c(1:i))
+
+  # Find medians for RFM grouped by cluster and print them
+  med <- customers %>% 
+      group_by(Cluster = customers[,(col_nm)]) %>% 
+      summarize(Recency=round(median(Recency), 0),
+              Frequency=round(median(Frequency),1),
+              Monetary=round(median(Monetary),2))
+  print(paste(i, "Clusters", sep=" "))
+  print(med)
+  
+  # store cluster info
+  ss[i,("K")] <- i 
+  ss[i,("TWSS")] <- km$tot.withinss
+}
+```
+
+
+In the 2-cluster resultset, we find that high-recency, high-frequency and high-value customers are in one cluster. Low-recency, low-frequency and low-value customers are in the other cluster.
+
+In the 3-cluster resultset, we find that high-recency, high-frequency and high-value customers are in cluster 1. Medium-recency, medium-frequency and medium-value customers are in cluster 2.  Low-recency, low-frequency and low-value customers are in cluster 3.
+
+In the 4-cluster resultset, cluster 1 has high-recency, high-frequency and high-value customers;
+cluster 2 has high-recency, high-frequency and medium-value customers; cluster 3 has medium-recency, medium-frequency and medium-value customers; cluster 4 has low-recency, low-frequency and low-value customers.
+
+3-cluster resultset seems interpretable. Let us plot 'Total within Sum of Squares' against k to see if we can find an elbow at cluster 3. An 'elbow' indicates the most optimal k.
+
+```{r echo=TRUE}
+# Plot sum within sum of squares
+ss %>% ggplot(aes(x = K, y = TWSS)) +
+  geom_point() +
+  geom_line()+
+  scale_y_continuous(labels = scales::comma)+
+  scale_x_continuous(breaks = 1:j)+
+  xlab("Clusters")+
+  ylab("Total within Sum of Squares")
+```
+
+We do find the bend at cluster 3. or is it at cluster 2? Let us plot cluster solutions from 2 to 5 and see how  they look visually.
+
+```{r echo=TRUE}
+
+# color palette for the scatter plot
+palette <- c('darkred','steelblue','green4','orange', "cyan")
+
+# Plot RFM flor cluster 2
+p1 <- customers %>% ggplot( aes(x = FrequencyZ, y = MonetaryZ))+
+  geom_point(aes(colour = C2))+
+  scale_colour_manual(name = "Cluster", values=palette)+
+  xlab("Frequency")+
+  ylab("Monetary Value")+
+  ggtitle(paste("2 Cluster Plot", sep=" "))
+
+# Plot RFM flor cluster 3
+p2<- customers %>% ggplot( aes(x = FrequencyZ, y = MonetaryZ))+
+  geom_point(aes(colour = C3))+
+  scale_colour_manual(name = "Cluster", values=palette)+
+  xlab("Frequency")+
+  ylab("Monetary Value")+
+  ggtitle(paste("3 Cluster Plot", sep=" "))
+
+# Plot RFM flor cluster 4
+p3<- customers %>% ggplot( aes(x = FrequencyZ, y = MonetaryZ))+
+  geom_point(aes(colour = C4))+
+  scale_colour_manual(name = "Cluster", values=palette)+
+  xlab("Frequency")+
+  ylab("Monetary Value")+
+  ggtitle(paste("4 Cluster Plot", sep=" "))
+
+# Plot RFM flor cluster 5
+p4<- customers %>% ggplot( aes(x = FrequencyZ, y = MonetaryZ))+
+  geom_point(aes(colour = C5))+
+  scale_colour_manual(name = "Cluster", values=palette)+
+  xlab("Frequency")+
+  ylab("Monetary Value")+
+  ggtitle(paste("5 Cluster Plot", sep=" "))
+```
+
+```{r echo=TRUE, fig.width=10, fig.height=8}
+# Arrange plots
+grid.arrange(p1, p2, p3, p4, ncol=2, nrow = 2)
+
+```
+
+Cluster 2 may be simplistic. Cluster 3 does look good. It may not always be possible to find distinct clusters since it depends on the data. 
+
+```{r echo=TRUE}
+rm(ss, med, col_nm, i, j, km, palette, p1, p2, p3, p4)
+```
+
+
+
+## Conclusion:
+
+```{r echo=TRUE}
+
+customers %>% 
+  group_by(C3) %>% 
+  summarize(Rmean = mean(Recency), 
+            Fmean = mean(Frequency), 
+            Mmean=mean(Monetary),
+            Msum=sum(Monetary))
+
+```
+
+If we look at the mean values of RFM it is clear that the customer segments are not distinct, which is perhaps the case in real life situations. It is important however to tailor an action plan based on the findings.
+
+
+[R-Markdown](https://github.com/madankundapur/DataAnalytics/blob/master/CustomerSegmentation-RFM-KmeansClustering.RMD)
+
+
