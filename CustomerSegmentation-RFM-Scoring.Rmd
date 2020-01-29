@@ -156,15 +156,6 @@ customers %>% ggplot(aes(Monetary))  +
 
 From the Monetary value plot, more than 97% of customers have spent less than $10000 across years.   
 
-Since the scale of values are very different for Recency, Frequency and Monetary. Let us remove the  skew and standardise the RFM values.
-
-```{r echo=TRUE}
-customers$RecencyZ <- scale(log(customers$Recency), center=TRUE, scale=TRUE)
-customers$FrequencyZ <- scale(log(customers$Frequency), center=TRUE, scale=TRUE)
-customers$MonetaryZ <- scale(log(customers$Monetary), center=TRUE, scale=TRUE)
-
-```
-
 We now have a tidy dataset with 793 observations of 8 variables to work with.
 
 ***
