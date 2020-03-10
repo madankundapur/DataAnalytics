@@ -1,0 +1,216 @@
+---
+title: "Market Basket Analysis"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+---
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7, 
+                      fig.height = 5,
+                      fig.align = 'center')
+```
+
+
+## Introduction
+
+Market Basket Analysis identifies the strength of association between products purchased together and  patterns of two or more things taking place together.
+
+For example, if Bread is purchased then Butter is likely to be purchased. or if Bread is purchase then Butter and Milk are likely to be purchased. These associated purchases are useful in cross selling strategies.
+
+We will use the Apriori algorithm for this analysis. Apriori is used for frequent item set mining and association rule learning. It identifies frequent individual items in the dataset and extends them to larger and larger item sets as long as those item sets appear sufficiently often in the dataset.
+
+### Data:
+
+We will use Restaurant Orders data for this analysis. This data has online orders for Indian Cuisine. It would be interesting to know the combination of items that people order together.
+
+First, load dependent libraries
+
+```{r echo=TRUE, warning=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(arules)) install.packages("arules", repos = "http://cran.us.r-project.org")
+if(!require(arulesViz)) install.packages("arulesViz", repos = "http://cran.us.r-project.org")
+```
+
+Load data from CSV file
+
+```{r echo=TRUE}
+Orders <- read_csv("https://raw.githubusercontent.com/madankundapur/DataAnalytics/master/Data/RestaurantOrders.csv")
+
+# remove spaces from variable names
+names(Orders)<-str_replace_all(names(Orders), c(" " = ""))
+
+# remove rows with NA
+Orders <- Orders[complete.cases(Orders), ]
+
+# change product name type to factor
+Orders$ItemName <- as.factor(Orders$ItemName)
+
+# change order date type to date
+Orders$Date <- as.Date(Orders$OrderDate, "%m/%d/%Y")
+
+```
+
+```{r echo=TRUE}
+str(Orders)
+```
+
+The dataset has 74818 observations and 7 variables
+
+## Analysis
+### Number of Items in each order
+
+```{r echo=TRUE}
+ItemsByOrder <- Orders %>% 
+  group_by(OrderNumber) %>% 
+  summarize(nItems = n()) 
+
+knitr::kable(summary(ItemsByOrder))
+
+ItemsByOrder %>%
+  ggplot(aes(x=nItems))+
+  geom_histogram(fill="steelblue", bins = 50) + 
+  geom_rug()+
+  coord_cartesian(xlim=c(0,60))
+
+```
+Customers mostly order5 to 6 items  
+
+
+### Ten best selling items
+
+```{r echo=TRUE}
+TopTen <- Orders %>% 
+  group_by(ItemName) %>% 
+  summarize(count = n()) %>% 
+  arrange(desc(count))
+
+TopTen <- head(TopTen, n=10)
+
+knitr::kable(TopTen)
+
+TopTen %>% 
+  ggplot(aes(x=reorder(ItemName,count), y=count))+
+  geom_bar(stat="identity",fill="steelblue")+
+  coord_flip()
+```
+
+### Itemset Summary
+
+Transform data from the data frame format into transactions such that we have all the items bought together in one row using ddply()
+
+```{r echo=TRUE}
+library(plyr)
+ItemList <- ddply(Orders,c("OrderNumber"), 
+                  function(df)paste(df$ItemName, 
+                                     collapse = "|"))
+```
+
+Remove Order Number variable since we need only Items data
+
+```{r echo=TRUE}
+ItemList$OrderNumber <- NULL
+colnames(ItemList) <- c("items")
+```
+
+Persist the data in a csv file for further use. 
+
+```{r echo=TRUE}
+write.csv(ItemList,"MarketBasket.csv", quote = FALSE, row.names = TRUE)
+```
+
+We now  have the dataset that shows the matrix of items bought together.  
+
+Inspect how many transactions we have and what they are.
+
+```{r echo=TRUE}
+write.csv(ItemList,"MarketBasket.csv", quote = FALSE, row.names = TRUE)
+
+Trn <- read.transactions('MarketBasket.csv', format = 'basket', sep='|')
+
+summary(Trn)
+```
+
+We have 13398 transactions and 13646 items 
+
+Summary gives some very useful information:
+
+* Density: The percentage of non-empty cells in the sparse matrix. i.e. the total number of items that were purchased, divided by the total number of possible items in the matrix. 
+
+* Most frequent items: Pilau rice was the most frequently purchased item
+
+* Sizes: Most customers buy about 5 items. 2559 transactions for 4 items, 2422 transactions for 5 items
+
+Item frequency plot:
+```{r}
+itemFrequencyPlot(Trn, topN=20, type='absolute')
+```
+
+### Applying Apriori
+
+* Let us use the Apriori algorithm in arules library to mine frequent itemsets and association rules. The algorithm employs level-wise search for frequent itemsets.
+
+* Pass supp=0.001 and conf=0.8 to return all the rules have a support of at least 0.1% and confidence of at least 80%. 
+
+* Sort the rules by decreasing confidence. 
+
+* The summary of the rules: 
+
+```{r echo=TRUE}
+Rules <- apriori(Trn, parameter = list(supp=0.001, conf=0.8))
+Rules <- sort(Rules, by='confidence', decreasing = TRUE)
+summary(Rules)
+```
+
+Summary of rules gives some very useful information:
+
+* Total number of rules are 7657
+
+* Most rules are 6 items long
+
+* Summary of quality measures:
+
+  Support: This says how popular an itemset is, as measured by the proportion of transactions in which an itemset appears
+  
+  Confidence: This says how likely item Y is purchased when item X is purchased
+  
+  Lift: This says how likely item Y is purchased when item X is purchased, while controlling for how popular item Y is.
+
+* Data mining information
+
+
+## Conclusion
+
+Let us now inspect Top 10 rules
+
+```{r echo=TRUE}
+inspect(Rules[1:10])
+```
+
+* Top 10 rules shows items on left hand side and the associated items on right hand side with support, confidence and lift 
+
+Let us plot the top 10 rules.
+
+```{r echo=TRUE}
+TopRules <- Rules[1:10]
+plot(TopRules)
+```
+
+```{r echo=TRUE}
+plot(TopRules, method="graph")
+```
+
+```{r echo=TRUE}
+plot(TopRules, method = "grouped")
+```
+
+If you like Indian cuisine, you may not find the plots surprising. I truly found the associations interesting.
+
+Market Basket Analysis need not be limited to shopping carts and supermarket shoppers.  It can be used to analyze credit card purchases of customers. In Healthcare, it can be used for symptom analysis with which a profile of illness can be better identified.
+
+
+[R-Markdown](https://github.com/madankundapur/DataAnalytics/blob/master/MarketBasketAnalysis.RMD)
